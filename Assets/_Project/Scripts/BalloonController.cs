@@ -16,6 +16,10 @@ public class BalloonController : MonoBehaviour
     [Tooltip("Duration of the pop shrink animation")]
     [SerializeField] private float popDuration = 0.2f;
 
+    [Header("VFX Settings")]
+    [Tooltip("Enable pop VFX particle burst (M1/A2)")]
+    [SerializeField] private bool enablePopVFX = true;
+
     private SpriteRenderer spriteRenderer;
     private Vector3 originalScale;
     private bool isPopping = false;
@@ -65,6 +69,13 @@ public class BalloonController : MonoBehaviour
             float scale = Mathf.Lerp(1f, punchScale, t);
             transform.localScale = originalScale * scale;
             yield return null;
+        }
+
+        // Spawn pop VFX at peak of punch animation (M1/A2)
+        if (enablePopVFX)
+        {
+            Color balloonColor = spriteRenderer != null ? spriteRenderer.color : Color.white;
+            PopVFXController.SpawnPopVFX(transform.position, balloonColor);
         }
 
         // Phase 2: Pop shrink (balloon shrinks and disappears)

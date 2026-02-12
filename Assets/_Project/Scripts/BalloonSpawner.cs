@@ -22,6 +22,14 @@ public class BalloonSpawner : MonoBehaviour
     private void Start()
     {
         SpawnBalloon();
+        // Test: spawn multiple colored balloons
+        spawnPosition = new Vector3(-1, 1, 0);
+        balloonColor = Color.white;
+        SpawnBalloon();
+
+        spawnPosition = new Vector3(1, 2, 0);
+        balloonColor = Color.white;
+        SpawnBalloon();
     }
 
     private void SpawnBalloon()
@@ -48,7 +56,7 @@ public class BalloonSpawner : MonoBehaviour
 
         // Add CircleCollider2D for tap detection
         CircleCollider2D collider = balloon.AddComponent<CircleCollider2D>();
-        collider.radius = 0.5f;
+        collider.radius = 4f;
 
         // Add BalloonController script
         balloon.AddComponent<BalloonController>();
