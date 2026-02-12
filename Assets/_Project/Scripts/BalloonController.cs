@@ -20,6 +20,10 @@ public class BalloonController : MonoBehaviour
     [Tooltip("Enable pop VFX particle burst (M1/A2)")]
     [SerializeField] private bool enablePopVFX = true;
 
+    [Header("Animal Settings (M1/A3)")]
+    [Tooltip("Reference to the animal that should descend when this balloon pops")]
+    [SerializeField] private AnimalController animalController;
+
     private SpriteRenderer spriteRenderer;
     private Vector3 originalScale;
     private bool isPopping = false;
@@ -71,11 +75,36 @@ public class BalloonController : MonoBehaviour
             yield return null;
         }
 
+        // Deactivate physics simulation during pop (M1/A3.2)
+        BalloonPhysics balloonPhysics = GetComponent<BalloonPhysics>();
+        if (balloonPhysics != null)
+        {
+            balloonPhysics.Deactivate();
+        }
+
         // Spawn pop VFX at peak of punch animation (M1/A2)
         if (enablePopVFX)
         {
             Color balloonColor = spriteRenderer != null ? spriteRenderer.color : Color.white;
             PopVFXController.SpawnPopVFX(transform.position, balloonColor);
+        }
+
+        // Trigger shockwave to nearby balloons (M1/A3.2)
+        BalloonManager balloonManager = FindObjectOfType<BalloonManager>();
+        if (balloonManager != null)
+        {
+            balloonManager.TriggerShockwave(transform.position);
+        }
+
+        // Trigger animal descent (M1/A3) - Optional with physics system
+        if (animalController != null)
+        {
+            animalController.DescendOneStep();
+        }
+        else
+        {
+            // Backward compatibility: log warning but don't crash
+            Debug.LogWarning("BalloonController: No AnimalController assigned. Animal will not descend.");
         }
 
         // Phase 2: Pop shrink (balloon shrinks and disappears)
