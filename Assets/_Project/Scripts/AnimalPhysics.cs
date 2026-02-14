@@ -1,73 +1,112 @@
 using UnityEngine;
 
 /// <summary>
-/// Pseudo-physical simulation for the animal affected by balloon lift forces and gravity.
-/// The animal is pulled up by balloons but held down by its own weight.
-/// Part of M1/A3.2: Pseudo-Physical Balloon System
+/// Cartoon-style animal follower: the animal is PASSIVE, dragged by balloons.
+/// Follows balloon cluster center with delay, inertia, overshoot, and pendulum swing.
+/// Uses spring-damper math — no Rigidbody, no real physics.
+/// Tilts slightly in the direction of movement for a "dragged" feel.
 /// </summary>
 public class AnimalPhysics : MonoBehaviour
 {
-    [Header("Mass Settings")]
-    [Tooltip("Mass of the animal (higher = harder for balloons to lift)")]
-    [SerializeField] private float mass = 2.0f;
+    [Header("Mass & Follow")]
+    [Tooltip("Animal mass — higher = more inertia, slower to follow")]
+    [SerializeField] private float animalMass = 1.5f;
 
-    [Tooltip("Gravity force pulling the animal down")]
-    [SerializeField] private float gravity = 9.8f;
+    [Tooltip("Follow lag — how long the animal takes to catch up (SmoothDamp time)")]
+    [SerializeField] private float followLag = 0.5f;
 
-    [Header("Movement")]
-    [Tooltip("Damping to smooth animal movement (0-1, higher = more damping)")]
-    [SerializeField] [Range(0f, 1f)] private float damping = 0.9f;
+    [Tooltip("Vertical offset below balloon cluster (simulates weight/gravity)")]
+    [SerializeField] private float gravityOffset = 2.0f;
 
-    [Tooltip("Maximum vertical velocity (prevents extreme speeds)")]
-    [SerializeField] private float maxVerticalVelocity = 5.0f;
+    [Header("Spring (Overshoot & Swing)")]
+    [Tooltip("Spring stiffness — higher = snappier response")]
+    [SerializeField] private float springStiffness = 8.0f;
+
+    [Tooltip("Swing damping — lower = more swing (0.3–0.8 recommended)")]
+    [SerializeField] [Range(0.1f, 1f)] private float swingDamping = 0.5f;
+
+    [Tooltip("Max velocity to prevent extreme movement")]
+    [SerializeField] private float maxVelocity = 6.0f;
+
+    [Header("Tilt")]
+    [Tooltip("How much the animal tilts when moving sideways")]
+    [SerializeField] private float tiltSensitivity = 8.0f;
+
+    [Tooltip("Max tilt angle in degrees")]
+    [SerializeField] private float maxTilt = 12.0f;
+
+    [Tooltip("Tilt smoothing (SmoothDamp time)")]
+    [SerializeField] private float tiltSmoothing = 0.2f;
 
     [Header("Ground")]
-    [Tooltip("Ground Y position (animal can't go below this)")]
+    [Tooltip("Ground Y position")]
     [SerializeField] private float groundLevel = -4.0f;
 
-    [Tooltip("Bounce factor when hitting ground (0 = no bounce, 1 = full bounce)")]
-    [SerializeField] [Range(0f, 0.5f)] private float groundBounce = 0.2f;
+    [Tooltip("Bounce factor when hitting ground")]
+    [SerializeField] [Range(0f, 0.5f)] private float groundBounce = 0.15f;
+
+    [Header("Attach Point")]
+    [Tooltip("Local offset where ropes connect (center/back of animal)")]
+    [SerializeField] private Vector2 ropeAttachOffset = Vector2.zero;
 
     // Runtime state
-    private Vector2 velocity = Vector2.zero;
     private BalloonManager balloonManager;
-    private float currentLiftForce = 0f;
+    private Vector2 velocity = Vector2.zero;
+    private bool isFrozen = false; // Physics live from spawn — animal follows balloons immediately
     private bool isGrounded = false;
+
+    // Tilt state
+    private float currentTilt;
+    private float tiltVelocity;
 
     private void Start()
     {
-        // Find balloon manager
         balloonManager = FindObjectOfType<BalloonManager>();
     }
 
-    private void FixedUpdate()
+    private void Update()
     {
-        // Calculate total lift from all active balloons
-        CalculateLiftForce();
+        if (isFrozen) return;
 
-        // Apply forces
-        ApplyForces();
+        float dt = Time.deltaTime;
+        if (dt < 0.0001f) return;
 
-        // Apply damping
-        velocity *= damping;
+        // Compute target position from balloon cluster
+        Vector3 targetPos = ComputeTargetPosition();
 
-        // Clamp vertical velocity
-        velocity.y = Mathf.Clamp(velocity.y, -maxVerticalVelocity, maxVerticalVelocity);
+        // Spring-damper: displacement → force → acceleration → velocity → position
+        Vector2 currentPos = transform.position;
+        Vector2 target2D = targetPos;
+        Vector2 displacement = target2D - currentPos;
 
-        // Update position
-        Vector3 newPosition = transform.position + (Vector3)velocity * Time.fixedDeltaTime;
+        // Spring force (pulls toward target)
+        Vector2 springForce = displacement * springStiffness;
+
+        // Damping force (resists velocity → creates swing when underdamped)
+        Vector2 dampingForce = -velocity * swingDamping * 2f * Mathf.Sqrt(springStiffness * animalMass);
+
+        // Acceleration = force / mass
+        Vector2 acceleration = (springForce + dampingForce) / animalMass;
+
+        // Integrate
+        velocity += acceleration * dt;
+
+        // Clamp velocity
+        if (velocity.magnitude > maxVelocity)
+        {
+            velocity = velocity.normalized * maxVelocity;
+        }
+
+        Vector2 newPos = currentPos + velocity * dt;
 
         // Ground collision
-        if (newPosition.y < groundLevel)
+        if (newPos.y < groundLevel)
         {
-            newPosition.y = groundLevel;
-
-            // Bounce
+            newPos.y = groundLevel;
             if (velocity.y < 0)
             {
                 velocity.y = -velocity.y * groundBounce;
             }
-
             isGrounded = true;
         }
         else
@@ -75,121 +114,94 @@ public class AnimalPhysics : MonoBehaviour
             isGrounded = false;
         }
 
-        transform.position = newPosition;
+        transform.position = new Vector3(newPos.x, newPos.y, 0f);
+
+        // Tilt in direction of movement
+        UpdateTilt(dt);
     }
 
-    /// <summary>
-    /// Calculates total lift force from all connected balloons
-    /// </summary>
-    private void CalculateLiftForce()
+    private Vector3 ComputeTargetPosition()
     {
-        currentLiftForce = 0f;
-
-        if (balloonManager != null)
+        if (balloonManager == null || balloonManager.GetBalloonCount() == 0)
         {
-            var balloons = balloonManager.GetAllBalloons();
-            foreach (var balloon in balloons)
-            {
-                currentLiftForce += balloon.GetLiftForce();
-            }
+            // No balloons — fall to ground
+            return new Vector3(transform.position.x, groundLevel, 0f);
         }
+
+        Vector3 clusterCenter = balloonManager.GetClusterCenter();
+
+        // Target = below cluster center by gravityOffset (simulates hanging weight)
+        return clusterCenter + Vector3.down * gravityOffset;
     }
 
-    /// <summary>
-    /// Applies gravity and lift forces to the animal
-    /// </summary>
-    private void ApplyForces()
+    private void UpdateTilt(float dt)
     {
-        // Gravity pulls down (scaled by mass)
-        float gravityForce = -gravity * mass;
-
-        // Lift from balloons pushes up
-        float netForce = gravityForce + currentLiftForce;
-
-        // Apply net force (F = ma, so a = F/m)
-        float acceleration = netForce / mass;
-        velocity.y += acceleration * Time.fixedDeltaTime;
+        // Tilt based on horizontal velocity (dragged feeling)
+        float targetTilt = Mathf.Clamp(-velocity.x * tiltSensitivity, -maxTilt, maxTilt);
+        currentTilt = Mathf.SmoothDamp(currentTilt, targetTilt, ref tiltVelocity, tiltSmoothing);
+        transform.rotation = Quaternion.Euler(0, 0, currentTilt);
     }
 
     /// <summary>
-    /// Gets the rope attachment point (center of animal)
+    /// Gets the world-space rope attachment point (center/back of animal)
     /// </summary>
     public Vector3 GetRopeAttachmentPoint()
     {
-        return transform.position;
+        return transform.position + (Vector3)ropeAttachOffset;
     }
 
-    /// <summary>
-    /// Sets the animal's mass
-    /// </summary>
+    public void SetFrozen(bool frozen)
+    {
+        isFrozen = frozen;
+        if (!frozen)
+        {
+            velocity = Vector2.zero;
+        }
+    }
+
+    public bool IsFrozen()
+    {
+        return isFrozen;
+    }
+
     public void SetMass(float newMass)
     {
-        mass = Mathf.Max(0.1f, newMass); // Prevent zero or negative mass
+        animalMass = Mathf.Max(0.1f, newMass);
     }
 
-    /// <summary>
-    /// Gets current mass
-    /// </summary>
     public float GetMass()
     {
-        return mass;
+        return animalMass;
     }
 
-    /// <summary>
-    /// Gets current lift force from balloons
-    /// </summary>
-    public float GetCurrentLiftForce()
-    {
-        return currentLiftForce;
-    }
-
-    /// <summary>
-    /// Gets the net force (positive = up, negative = down)
-    /// </summary>
-    public float GetNetForce()
-    {
-        return (-gravity * mass) + currentLiftForce;
-    }
-
-    /// <summary>
-    /// Checks if animal is on the ground
-    /// </summary>
     public bool IsGrounded()
     {
         return isGrounded;
     }
 
-    /// <summary>
-    /// Debug visualization
-    /// </summary>
     private void OnDrawGizmos()
     {
         if (!Application.isPlaying) return;
 
-        // Draw ground level
+        // Ground level
         Gizmos.color = new Color(0.5f, 0.3f, 0.1f, 0.5f);
         Gizmos.DrawLine(new Vector3(-10, groundLevel, 0), new Vector3(10, groundLevel, 0));
 
-        // Draw velocity vector
+        // Velocity vector
         Gizmos.color = Color.blue;
-        Gizmos.DrawLine(transform.position, transform.position + (Vector3)velocity);
+        Gizmos.DrawLine(transform.position, transform.position + (Vector3)velocity * 0.3f);
 
-        // Draw force indicators
-        Vector3 pos = transform.position;
-
-        // Gravity force (red, downward)
-        float gravityViz = (gravity * mass) * 0.1f;
-        Gizmos.color = Color.red;
-        Gizmos.DrawLine(pos, pos + Vector3.down * gravityViz);
-
-        // Lift force (green, upward)
-        float liftViz = currentLiftForce * 0.1f;
-        Gizmos.color = Color.green;
-        Gizmos.DrawLine(pos, pos + Vector3.up * liftViz);
-
-        // Net force (yellow)
-        float netForceViz = GetNetForce() * 0.1f;
+        // Rope attach point
         Gizmos.color = Color.yellow;
-        Gizmos.DrawLine(pos + Vector3.right * 0.3f, pos + Vector3.right * 0.3f + Vector3.up * netForceViz);
+        Gizmos.DrawWireSphere(GetRopeAttachmentPoint(), 0.08f);
+
+        // Target position
+        if (balloonManager != null && balloonManager.GetBalloonCount() > 0)
+        {
+            Vector3 target = ComputeTargetPosition();
+            Gizmos.color = Color.magenta;
+            Gizmos.DrawWireSphere(target, 0.1f);
+            Gizmos.DrawLine(transform.position, target);
+        }
     }
 }

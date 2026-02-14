@@ -2,7 +2,8 @@ using UnityEngine;
 
 /// <summary>
 /// Handles balloon tap detection, pop animation, and destruction.
-/// Part of Milestone M1/A1: Tap balloon → pop animation + randomized SFX
+/// Integrates with BalloonPhysics (deactivate on pop) and BalloonManager (shockwave).
+/// Animal descent is handled naturally by the physics system (fewer balloons = less lift).
 /// </summary>
 public class BalloonController : MonoBehaviour
 {
@@ -17,12 +18,8 @@ public class BalloonController : MonoBehaviour
     [SerializeField] private float popDuration = 0.2f;
 
     [Header("VFX Settings")]
-    [Tooltip("Enable pop VFX particle burst (M1/A2)")]
+    [Tooltip("Enable pop VFX particle burst")]
     [SerializeField] private bool enablePopVFX = true;
-
-    [Header("Animal Settings (M1/A3)")]
-    [Tooltip("Reference to the animal that should descend when this balloon pops")]
-    [SerializeField] private AnimalController animalController;
 
     private SpriteRenderer spriteRenderer;
     private Vector3 originalScale;
@@ -36,35 +33,28 @@ public class BalloonController : MonoBehaviour
 
     private void OnMouseDown()
     {
-        // Only process tap if not already popping
         if (!isPopping)
         {
             Pop();
         }
     }
 
-    /// <summary>
-    /// Triggers the balloon pop sequence: punch animation → SFX → pop animation → destroy
-    /// </summary>
     public void Pop()
     {
         if (isPopping) return;
-
         isPopping = true;
 
-        // Play randomized pop SFX
         if (AudioManager.Instance != null)
         {
             AudioManager.Instance.PlayRandomPopSFX();
         }
 
-        // Start pop animation sequence
         StartCoroutine(PopSequence());
     }
 
     private System.Collections.IEnumerator PopSequence()
     {
-        // Phase 1: Scale punch (balloon expands quickly)
+        // Phase 1: Scale punch (balloon expands)
         float elapsed = 0f;
         while (elapsed < punchDuration)
         {
@@ -75,39 +65,35 @@ public class BalloonController : MonoBehaviour
             yield return null;
         }
 
-        // Deactivate physics simulation during pop (M1/A3.2)
-        BalloonPhysics balloonPhysics = GetComponent<BalloonPhysics>();
-        if (balloonPhysics != null)
+        // Deactivate physics
+        BalloonPhysics bp = GetComponent<BalloonPhysics>();
+        if (bp != null)
         {
-            balloonPhysics.Deactivate();
+            bp.Deactivate();
         }
 
-        // Spawn pop VFX at peak of punch animation (M1/A2)
+        // Hide rope immediately
+        RopeRenderer rope = GetComponent<RopeRenderer>();
+        if (rope != null)
+        {
+            rope.SetRopeVisible(false);
+        }
+
+        // Pop VFX
         if (enablePopVFX)
         {
             Color balloonColor = spriteRenderer != null ? spriteRenderer.color : Color.white;
             PopVFXController.SpawnPopVFX(transform.position, balloonColor);
         }
 
-        // Trigger shockwave to nearby balloons (M1/A3.2)
-        BalloonManager balloonManager = FindObjectOfType<BalloonManager>();
-        if (balloonManager != null)
+        // Shockwave to nearby balloons
+        BalloonManager bm = FindObjectOfType<BalloonManager>();
+        if (bm != null)
         {
-            balloonManager.TriggerShockwave(transform.position);
+            bm.TriggerShockwave(transform.position);
         }
 
-        // Trigger animal descent (M1/A3) - Optional with physics system
-        if (animalController != null)
-        {
-            animalController.DescendOneStep();
-        }
-        else
-        {
-            // Backward compatibility: log warning but don't crash
-            Debug.LogWarning("BalloonController: No AnimalController assigned. Animal will not descend.");
-        }
-
-        // Phase 2: Pop shrink (balloon shrinks and disappears)
+        // Phase 2: Shrink + fade out
         elapsed = 0f;
         while (elapsed < popDuration)
         {
@@ -116,18 +102,16 @@ public class BalloonController : MonoBehaviour
             float scale = Mathf.Lerp(punchScale, 0f, t);
             transform.localScale = originalScale * scale;
 
-            // Fade out sprite
             if (spriteRenderer != null)
             {
-                Color color = spriteRenderer.color;
-                color.a = Mathf.Lerp(1f, 0f, t);
-                spriteRenderer.color = color;
+                Color c = spriteRenderer.color;
+                c.a = Mathf.Lerp(1f, 0f, t);
+                spriteRenderer.color = c;
             }
 
             yield return null;
         }
 
-        // Destroy the balloon GameObject
         Destroy(gameObject);
     }
 }

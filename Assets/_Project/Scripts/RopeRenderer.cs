@@ -1,194 +1,172 @@
 using UnityEngine;
 
 /// <summary>
-/// Renders a visual rope/string connection between a balloon and the animal.
-/// Uses LineRenderer for simple, efficient rope visualization.
-/// Part of M1/A3.1: Ropes and Float Animation
+/// Sprite-based straight rope connecting a balloon to the animal.
+/// Rope is always straight — elasticity is represented ONLY by Y-scale.
+/// No bending, no curves, no physics joints, no LineRenderer.
+/// Renders BEHIND both balloons and the animal.
 /// </summary>
-[RequireComponent(typeof(LineRenderer))]
 public class RopeRenderer : MonoBehaviour
 {
-    [Header("Rope Connection")]
+    [Header("Rope Appearance")]
+    [Tooltip("Width of the rope in world units")]
+    [SerializeField] private float ropeWidth = 0.04f;
+
+    [Tooltip("Color of the rope")]
+    [SerializeField] private Color ropeColor = new Color(0.55f, 0.35f, 0.2f, 0.9f);
+
+    [Tooltip("Max stretch multiplier (visual cap, e.g., 1.3 = 30% longer than rest)")]
+    [SerializeField] private float maxRopeStretch = 1.3f;
+
+    [Tooltip("How smoothly the rope scale adjusts (lower = snappier)")]
+    [SerializeField] private float ropeElasticity = 0.08f;
+
+    [Header("References")]
     [Tooltip("The animal this rope connects to")]
     [SerializeField] private Transform animalTransform;
 
-    [Tooltip("Offset from balloon position (adjust for visual attachment point)")]
-    [SerializeField] private Vector3 balloonOffset = new Vector3(0, -0.5f, 0);
+    // Runtime
+    private GameObject ropeObject;
+    private SpriteRenderer ropeSR;
+    private Transform ropeTransform;
+    private float currentScaleY;
+    private float scaleYVelocity;
+    private float restLength;
+    private bool initialized = false;
 
-    [Tooltip("Offset from animal position (adjust for visual attachment point)")]
-    [SerializeField] private Vector3 animalOffset = new Vector3(0, 0.5f, 0);
-
-    [Header("Rope Appearance")]
-    [Tooltip("Width of the rope line")]
-    [SerializeField] private float ropeWidth = 0.05f;
-
-    [Tooltip("Color of the rope")]
-    [SerializeField] private Color ropeColor = new Color(0.6f, 0.4f, 0.2f, 0.8f); // Brown-ish
-
-    [Tooltip("Number of segments for rope curve (higher = smoother, 2 = straight line)")]
-    [SerializeField] private int ropeSegments = 5;
-
-    [Tooltip("Amount of rope sag/curve in the middle (0 = straight, higher = more sag)")]
-    [SerializeField] private float ropeSag = 0.3f;
-
-    private LineRenderer lineRenderer;
-    private Transform balloonTransform;
-
-    private void Awake()
-    {
-        balloonTransform = transform;
-        SetupLineRenderer();
-    }
+    // Static cached sprite (shared across all ropes)
+    private static Sprite cachedRopeSprite;
 
     private void Start()
     {
-        // If no animal assigned, try to find it
         if (animalTransform == null)
         {
             GameObject animal = GameObject.Find("Animal");
             if (animal != null)
             {
                 animalTransform = animal.transform;
-                Debug.Log($"RopeRenderer: Auto-found animal '{animal.name}'");
-            }
-            else
-            {
-                Debug.LogWarning("RopeRenderer: No animal found! Rope will not render.");
             }
         }
+
+        CreateRopeObject();
+        initialized = true;
+    }
+
+    private void CreateRopeObject()
+    {
+        // Create a standalone rope object (NOT parented to balloon — avoids inheriting pop scale)
+        ropeObject = new GameObject("Rope_" + gameObject.name);
+        ropeTransform = ropeObject.transform;
+
+        ropeSR = ropeObject.AddComponent<SpriteRenderer>();
+        ropeSR.sprite = GetRopeSprite();
+        ropeSR.color = ropeColor;
+
+        // Render behind everything
+        ropeSR.sortingOrder = -1;
+
+        // Initial rest length = current distance
+        if (animalTransform != null)
+        {
+            restLength = Vector3.Distance(GetBalloonAttachPoint(), GetAnimalAttachPoint());
+        }
+        else
+        {
+            restLength = 2.5f;
+        }
+
+        currentScaleY = restLength;
     }
 
     private void LateUpdate()
     {
-        // Update rope position every frame to follow balloon and animal
-        if (animalTransform != null && balloonTransform != null)
-        {
-            UpdateRopeLine();
-        }
+        if (!initialized || ropeObject == null || animalTransform == null) return;
+
+        Vector3 balloonAttach = GetBalloonAttachPoint();
+        Vector3 animalAttach = GetAnimalAttachPoint();
+        Vector3 dir = animalAttach - balloonAttach;
+        float distance = dir.magnitude;
+
+        if (distance < 0.001f) return;
+
+        // 1. Position: at balloon's rope attachment point
+        ropeTransform.position = balloonAttach;
+
+        // 2. Rotation: point local -Y toward animal (rope hangs down from balloon)
+        float angle = Mathf.Atan2(dir.y, dir.x) * Mathf.Rad2Deg + 90f;
+        ropeTransform.rotation = Quaternion.Euler(0, 0, angle);
+
+        // 3. Scale: X = width, Y = distance (with stretch cap + smooth)
+        float targetScaleY = Mathf.Min(distance, restLength * maxRopeStretch);
+        currentScaleY = Mathf.SmoothDamp(currentScaleY, targetScaleY, ref scaleYVelocity, ropeElasticity);
+
+        ropeTransform.localScale = new Vector3(ropeWidth, currentScaleY, 1f);
     }
 
-    /// <summary>
-    /// Sets up the LineRenderer component with initial settings
-    /// </summary>
-    private void SetupLineRenderer()
+    private Vector3 GetBalloonAttachPoint()
     {
-        lineRenderer = GetComponent<LineRenderer>();
+        // Use BalloonPhysics attach point if available (accounts for rotation)
+        BalloonPhysics bp = GetComponent<BalloonPhysics>();
+        if (bp != null)
+        {
+            return bp.GetRopeAttachmentPoint();
+        }
 
-        // Basic settings
-        lineRenderer.positionCount = ropeSegments;
-        lineRenderer.startWidth = ropeWidth;
-        lineRenderer.endWidth = ropeWidth;
-        lineRenderer.startColor = ropeColor;
-        lineRenderer.endColor = ropeColor;
-
-        // Material (use default sprite material for 2D)
-        lineRenderer.material = new Material(Shader.Find("Sprites/Default"));
-        lineRenderer.material.color = ropeColor;
-
-        // Sorting
-        lineRenderer.sortingOrder = 5; // Behind balloons (10) but above background
-
-        // Disable shadows and other 3D features
-        lineRenderer.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
-        lineRenderer.receiveShadows = false;
-
-        // Use world space
-        lineRenderer.useWorldSpace = true;
-
-        // Smooth corners
-        lineRenderer.numCornerVertices = 3;
-        lineRenderer.numCapVertices = 3;
+        // Fallback: bottom of balloon
+        return transform.position + Vector3.down * (transform.localScale.x * 0.5f);
     }
 
-    /// <summary>
-    /// Updates the rope line positions to follow balloon and animal
-    /// Updated for M1/A3.2: Uses physics-based attachment points
-    /// </summary>
-    private void UpdateRopeLine()
+    private Vector3 GetAnimalAttachPoint()
     {
-        // Try to get attachment points from physics components
-        Vector3 startPos;
-        Vector3 endPos;
-
-        // Get balloon attachment point (bottom center)
-        BalloonPhysics balloonPhysics = balloonTransform.GetComponent<BalloonPhysics>();
-        if (balloonPhysics != null)
+        // Use AnimalPhysics attach point if available
+        AnimalPhysics ap = animalTransform.GetComponent<AnimalPhysics>();
+        if (ap != null)
         {
-            startPos = balloonPhysics.GetRopeAttachmentPoint();
-        }
-        else
-        {
-            // Fallback to offset method (for backward compatibility)
-            startPos = balloonTransform.position + balloonOffset;
+            return ap.GetRopeAttachmentPoint();
         }
 
-        // Get animal attachment point (center)
-        AnimalPhysics animalPhysics = animalTransform.GetComponent<AnimalPhysics>();
-        if (animalPhysics != null)
-        {
-            endPos = animalPhysics.GetRopeAttachmentPoint();
-        }
-        else
-        {
-            // Fallback to offset method (for backward compatibility)
-            endPos = animalTransform.position + animalOffset;
-        }
-
-        // Calculate rope curve with sag
-        for (int i = 0; i < ropeSegments; i++)
-        {
-            float t = i / (float)(ropeSegments - 1);
-
-            // Linear interpolation
-            Vector3 position = Vector3.Lerp(startPos, endPos, t);
-
-            // Add sag (parabolic curve in the middle)
-            float sagAmount = CalculateSag(t);
-            position.x += sagAmount * ropeSag; // Sag to the side (can change to .y for downward sag)
-
-            lineRenderer.SetPosition(i, position);
-        }
+        // Fallback: center of animal
+        return animalTransform.position;
     }
 
     /// <summary>
-    /// Calculates the sag amount for a given position along the rope
-    /// Uses a parabolic curve (peaks at t=0.5)
+    /// Creates or returns cached 1x1 white sprite with pivot at top center.
+    /// PPU = 1 so scale directly maps to world units.
     /// </summary>
-    private float CalculateSag(float t)
+    private static Sprite GetRopeSprite()
     {
-        // Parabola: -4(t - 0.5)^2 + 1
-        // Peaks at t=0.5 with value 1, goes to 0 at t=0 and t=1
-        return -4f * (t - 0.5f) * (t - 0.5f) + 1f;
+        if (cachedRopeSprite != null) return cachedRopeSprite;
+
+        Texture2D tex = new Texture2D(1, 1);
+        tex.SetPixel(0, 0, Color.white);
+        tex.Apply();
+        tex.filterMode = FilterMode.Point;
+
+        // Pivot at (0.5, 1.0) = top center — sprite extends downward from anchor
+        cachedRopeSprite = Sprite.Create(tex, new Rect(0, 0, 1, 1), new Vector2(0.5f, 1f), 1f);
+
+        return cachedRopeSprite;
     }
 
-    /// <summary>
-    /// Sets the animal transform reference
-    /// </summary>
     public void SetAnimal(Transform animal)
     {
         animalTransform = animal;
     }
 
-    /// <summary>
-    /// Enables or disables the rope rendering
-    /// </summary>
     public void SetRopeVisible(bool visible)
     {
-        if (lineRenderer != null)
+        if (ropeSR != null)
         {
-            lineRenderer.enabled = visible;
+            ropeSR.enabled = visible;
         }
     }
 
-    /// <summary>
-    /// Called when balloon is destroyed - disable rope
-    /// </summary>
     private void OnDestroy()
     {
-        // Clean up material to prevent memory leak
-        if (lineRenderer != null && lineRenderer.material != null)
+        // Clean up the standalone rope object
+        if (ropeObject != null)
         {
-            Destroy(lineRenderer.material);
+            Destroy(ropeObject);
         }
     }
 }
