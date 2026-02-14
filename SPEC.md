@@ -297,9 +297,13 @@ SaveTheAnimals/
 ## D) Task Slicing (example)
 
 **Milestone M1: Core Fun**
-- A1: Tap balloon → pop animation + random SFX
-- A2: Pop VFX (Canvas-compatible)
-- A3: Animal descend step per pop
+- A1: Tap balloon → pop animation + random SFX ✅
+- A2: Pop VFX (Canvas-friendly ParticleSystem burst) ✅
+  - A2.1: Static cache for procedural texture/material (avoid per-pop allocation) ✅
+- A3: Animal descend step per pop ✅
+  - A3.1: Rope rendering (LineRenderer) + float animation (sine-wave bobbing) ✅
+  - A3.2: Pseudo-physical balloon system — force-based lift, collision, shockwave, mass/gravity ✅
+  - A3.3: Cartoon physics rewrite — balloons lead (SmoothDamp), animal follows (spring-damper with inertia/swing/tilt), sprite-based straight ropes (Y-scale stretch), physics-driven fly-in from right (no frozen state, balloons arrive first, animal trails with delay) ✅
 - A4: Final land bounce + dust
 - A5: Simple reward screen → Next
 
